@@ -16,7 +16,7 @@ Item {
   property var shell: null
   property var manifest: null
 
-  readonly property string pluginId: manifest?.id || "ruuts.studio-display"
+  readonly property string pluginId: manifest?.id || "io.github.ruuts.studio-display"
   readonly property string runtimeDir: Quickshell.env("XDG_RUNTIME_DIR") || ""
   readonly property string manualSignalPath: runtimeDir + "/omarchy-brightness-display.lock"
 

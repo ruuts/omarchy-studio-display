@@ -4,7 +4,7 @@ import qs.Ui
 
 BarWidget {
   id: root
-  moduleName: "ruuts.studio-display"
+  moduleName: "io.github.ruuts.studio-display"
 
   readonly property var service: bar?.shell?.serviceFor(root.moduleName)
   readonly property bool opened: panelLoader.item ? panelLoader.item.opened === true : false

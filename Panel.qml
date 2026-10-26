@@ -5,7 +5,7 @@ import qs.Ui
 // The plugin's panel, behind its bar icon.
 Panel {
   id: root
-  moduleName: "ruuts.studio-display"
+  moduleName: "io.github.ruuts.studio-display"
   manageIpc: false
 
   property var anchorItem: null

@@ -19,7 +19,7 @@ The icon appears in the bar while the display is connected.
 ## Remove
 
 ```sh
-omarchy plugin remove ruuts.studio-display --yes
+omarchy plugin remove io.github.ruuts.studio-display --yes
 ```
 
 Unloading hands the screen back to 6500 K (unless night light is on). hyprsunset keeps running with the schedule in `~/.config/hypr/hyprsunset.conf`, as Omarchy's own night light uses it.

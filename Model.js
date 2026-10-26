@@ -1,4 +1,4 @@
-// Pure logic for ruuts.studio-display, shared by Service.qml and test.cjs.
+// Pure logic for io.github.ruuts.studio-display, shared by Service.qml and test.cjs.
 
 // Omarchy's night light: on below 6000 K (NightlightModel.js), off is 6500 K, on is 4000 K
 // (bin/omarchy-toggle-nightlight).
@@ -262,7 +262,7 @@ function scheduleConf(schedule) {
   ]
   if (!schedule.enabled) warm = warm.map(function(line) { return "# " + line })
   return [
-    "# Night light schedule, edited from the Studio Display panel (ruuts.studio-display).",
+    "# Night light schedule, edited from the Studio Display panel (io.github.ruuts.studio-display).",
     "# Hand edits work too; apply them with: omarchy restart hyprsunset",
     "",
     "# Neutral screen from this time",
