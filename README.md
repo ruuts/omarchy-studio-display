@@ -2,6 +2,8 @@
 
 Auto-brightness and True Tone for the Apple Studio Display (2022, 27") on Omarchy.
 
+![The Studio Display panel next to the Omarchy bar](preview.png)
+
 ## Requirements
 
 - An Apple Studio Display (2022, 27", USB ID `05ac:1114`) connected so its USB side reaches the computer (Thunderbolt, or USB-C with data). The plugin reads the display's own light sensor, so other displays are not supported.
