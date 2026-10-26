@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "ruuts.studio-display",
+  "name": "Studio Display",
+  "version": "0.1.0",
+  "author": "ruuts",
+  "description": "Auto-brightness and True Tone for the Apple Studio Display",
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Studio Display",
+    "description": "Auto-brightness and True Tone",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
