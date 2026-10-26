@@ -85,8 +85,9 @@ Item {
     var previousProfile = profile
     autoBrightness = next.autoBrightness !== false
     profile = ["dim", "balanced", "bright"].indexOf(next.profile) >= 0 ? next.profile : "balanced"
-    // Changing the auto-brightness settings is an explicit request to follow the room again.
-    if (manualPause && ((!wasAuto && autoBrightness) || previousProfile !== profile)) resume()
+    // Switching auto-brightness on takes over from whatever the display is at now
+    // (it may have changed while off); a new profile while paused resumes too.
+    if ((!wasAuto && autoBrightness) || (manualPause && previousProfile !== profile)) resume()
     var wasTrueTone = trueTone
     trueTone = next.trueTone !== false
     strength = ["subtle", "normal", "strong"].indexOf(next.strength) >= 0 ? next.strength : "normal"
@@ -351,6 +352,8 @@ Item {
     printErrors: false
     onFileChanged: {
       reload()
+      // While auto-brightness is off the last known value goes stale.
+      if (!root.autoBrightness) root.applied = null
       if (!root.autoBrightness || root.lux === null) return
       manualRead.restart()
     }
