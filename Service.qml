@@ -35,6 +35,7 @@ Item {
 
   // Brightness.
   property var applied: null
+  property double lastReadAt: 0
   property int target: 0
   property bool manualPause: false
   property var manualLux: null
@@ -44,6 +45,11 @@ Item {
   readonly property bool nightLight: nightState.nightLight === true
   property int toneTarget: 0
   property string error: ""
+  // Bumped whenever True Tone lets go, so hyprsunset writes still in flight
+  // don't claim the temperature afterwards.
+  property int toneGeneration: 0
+  // When this plugin last started hyprsunset (ms).
+  property double sunsetLaunchedAt: 0
 
   // Night light schedule, kept in hyprsunset.conf.
   readonly property string scheduleConfPath: Quickshell.env("HOME") + "/.config/hypr/hyprsunset.conf"
@@ -101,7 +107,13 @@ Item {
     manualPause = false
     manualLux = null
     applied = null
-    if (!readBrightness.running) readBrightness.running = true
+    readCurrentBrightness()
+  }
+
+  function readCurrentBrightness() {
+    if (readBrightness.running) return
+    lastReadAt = Date.now()
+    readBrightness.running = true
   }
 
   function updateBrightness() {
@@ -114,7 +126,12 @@ Item {
       if (ratio >= 2.5 || ratio <= 0.4) resume()
       return
     }
-    if (applied === null || setBrightness.running) return
+    if (applied === null) {
+      // The display's HID interface can be missing for a moment after a replug.
+      if (Date.now() - lastReadAt > 15000) readCurrentBrightness()
+      return
+    }
+    if (setBrightness.running) return
 
     var next = Model.brightnessStep(applied, target)
     if (next === applied) return
@@ -125,20 +142,41 @@ Item {
 
   // ---- True Tone -----------------------------------------------------------
 
-  function setTemperature(kelvin) {
+  // All hyprsunset writes go through this one queue. `own` marks a temperature
+  // True Tone (or its night light claim) set, as opposed to handing the screen back.
+  function setTemperature(kelvin, own) {
+    var request = { kelvin: Number(kelvin), own: own !== false, generation: toneGeneration }
     if (setTone.running) {
-      setTone.queued = kelvin
+      setTone.queued = request
       return
     }
-    setTone.pending = kelvin
-    setTone.command = ["bash", "-c",
-      "pgrep -x hyprsunset >/dev/null || { setsid uwsm-app -- hyprsunset >/dev/null 2>&1 & sleep 1; }; "
-      + "hyprctl hyprsunset temperature " + Number(kelvin) + " >/dev/null"]
+    setTone.request = request
+    setTone.command = ["hyprctl", "hyprsunset", "temperature", String(request.kelvin)]
     setTone.running = true
   }
 
+  function sunsetSettling() {
+    return Date.now() - sunsetLaunchedAt < 3000
+  }
+
+  // Start (or restart) hyprsunset. It applies its current schedule entry while it
+  // boots, so instead of setting a temperature right away, True Tone waits and
+  // then looks at what hyprsunset holds, as on a fresh start.
+  function launchSunset(restart) {
+    sunsetLaunchedAt = Date.now()
+    toneGeneration++
+    setTone.queued = null
+    nightState = { nightLight: nightState.nightLight, lastSeenTemp: null, lastProfileTime: null, ownTemp: null }
+    Quickshell.execDetached(["bash", "-c",
+      (restart
+        // Wait for the old instance to let go of its socket, or the new one exits.
+        ? "pkill -x hyprsunset; for i in $(seq 50); do pgrep -x hyprsunset >/dev/null || break; sleep 0.1; done; "
+        : "pgrep -x hyprsunset >/dev/null && exit 0; ")
+      + "setsid uwsm-app -- hyprsunset >/dev/null 2>&1"])
+  }
+
   function updateTrueTone() {
-    if (!trueTone || ambientK === null || sunsetRestarting.running) return
+    if (!trueTone || ambientK === null || sunsetSettling()) return
     if (!probeTone.running) probeTone.running = true
   }
 
@@ -172,16 +210,17 @@ Item {
     }
   }
 
+  // Hand the screen back (6500 K, Omarchy's night light "off"), unless night light
+  // holds it. A write still in flight lands first and no longer counts as ours.
   function stopTrueTone() {
-    if (!nightLight && nightState.ownTemp !== null) {
-      setTone.queued = null
-      Quickshell.execDetached(["hyprctl", "hyprsunset", "temperature", String(Model.NIGHT_OFF)])
-    }
-    // Keep what we know about night light; only forget the temperature True Tone set.
+    var owned = nightState.ownTemp !== null || setTone.running || setTone.queued !== null
+    toneGeneration++
+    setTone.queued = null
     var next = {}
     for (var k in nightState) next[k] = nightState[k]
     next.ownTemp = null
     nightState = next
+    if (owned && !nightLight) setTemperature(Model.NIGHT_OFF, false)
   }
 
   // ---- night light ---------------------------------------------------------
@@ -243,10 +282,14 @@ Item {
     updateTrueTone()
   }
 
+  // The display went away (unplugged, switched to another machine, asleep). Other
+  // screens would keep its tint, so give it back; look afresh when it returns.
   function sensorLost() {
     sensorDir = ""
     lux = null
     applied = null
+    if (trueTone) stopTrueTone()
+    nightState = { nightLight: nightState.nightLight, lastSeenTemp: null, lastProfileTime: null, ownTemp: null }
   }
 
   Process {
@@ -263,7 +306,7 @@ Item {
         var dir = String(text).trim()
         if (dir === "") return
         root.sensorDir = dir
-        if (!readBrightness.running) readBrightness.running = true
+        root.readCurrentBrightness()
       }
     }
   }
@@ -298,8 +341,10 @@ Item {
   }
 
   // omarchy-brightness-display opens this lock file for every change it makes: the
-  // brightness keys and Omarchy's monitor panel. This plugin calls the Apple script
-  // directly, so a change here always means a change by hand.
+  // brightness keys and Omarchy's monitor panel, for any screen. This plugin calls
+  // the Apple script directly, so a change here is a change by hand; whether it was
+  // this display shows in its brightness, read a moment later (the lock is taken
+  // before the change is written).
   FileView {
     path: root.manualSignalPath
     watchChanges: true
@@ -307,9 +352,6 @@ Item {
     onFileChanged: {
       reload()
       if (!root.autoBrightness || root.lux === null) return
-      root.manualPause = true
-      root.manualLux = root.lux
-      // The lock is taken before the change is written; read the result a moment later.
       manualRead.restart()
     }
   }
@@ -317,17 +359,32 @@ Item {
   Timer {
     id: manualRead
     interval: 1000
-    onTriggered: if (!readBrightness.running) readBrightness.running = true
+    onTriggered: {
+      if (readBrightness.running) {
+        restart()
+        return
+      }
+      readBrightness.checkingManual = true
+      root.readCurrentBrightness()
+    }
   }
 
   Process {
     id: readBrightness
+    property bool checkingManual: false
     command: ["omarchy-brightness-display-apple"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         var value = parseInt(String(text).trim())
-        if (!isNaN(value)) root.applied = value
+        var checking = readBrightness.checkingManual
+        readBrightness.checkingManual = false
+        if (isNaN(value)) return
+        if (checking && (root.applied === null || value !== root.applied)) {
+          root.manualPause = true
+          root.manualLux = root.lux
+        }
+        root.applied = value
       }
     }
   }
@@ -342,7 +399,7 @@ Item {
       } else {
         root.error = "Could not set the brightness"
         root.applied = null
-        if (!readBrightness.running) readBrightness.running = true
+        root.readCurrentBrightness()
       }
     }
   }
@@ -356,10 +413,8 @@ Item {
         var parts = String(text).split("---")
         var temp = Model.parseTemperature(parts[0])
         if (temp === null) {
-          if (!root.trueTone || sunsetRestarting.running) return
-          // hyprsunset is not running yet; start it with the current target.
-          root.toneTarget = Model.trueToneTarget(root.ambientK, root.strength)
-          root.setTemperature(root.toneTarget)
+          // hyprsunset is not running: start it, then observe it on a later tick.
+          if (root.trueTone && Date.now() - root.sunsetLaunchedAt > 10000) root.launchSunset(false)
           return
         }
         var profile = Model.parseProfile(parts[1])
@@ -375,20 +430,24 @@ Item {
 
   Process {
     id: setTone
-    property var pending: null
+    property var request: null
     property var queued: null
+    stdout: StdioCollector { id: setToneOutput; waitForEnd: true }
     onExited: function(exitCode) {
-      if (exitCode === 0 && pending !== null) {
+      var done = request
+      request = null
+      // hyprctl reports a missing hyprsunset on stdout, so check for its "ok".
+      var applied = exitCode === 0 && /^\s*ok\s*$/.test(String(setToneOutput.text))
+      if (applied && done && done.own && done.generation === root.toneGeneration) {
         var next = {}
         for (var k in root.nightState) next[k] = root.nightState[k]
-        next.ownTemp = pending
+        next.ownTemp = done.kelvin
         root.nightState = next
       }
-      pending = null
       if (queued !== null) {
-        var kelvin = queued
+        var again = queued
         queued = null
-        root.setTemperature(kelvin)
+        if (again.generation === root.toneGeneration || !again.own) root.setTemperature(again.kelvin, again.own)
       }
     }
   }
@@ -404,25 +463,12 @@ Item {
     if (!probeTone.running) probeTone.running = true
   }
 
-  // Wait for a pause in edits, then write the file and restart hyprsunset to apply it.
+  // Wait for a pause in edits, then change the schedule in the file. hyprsunset
+  // reads it only at start, so restart it once the file is saved.
   Timer {
     id: writeSchedule
     interval: 1200
-    onTriggered: {
-      scheduleFile.setText(Model.scheduleConf(root.schedule))
-      sunsetRestarting.restart()
-      // Like omarchy-restart-hyprsunset, but wait for the old instance to let go of its
-      // socket first; otherwise the new one can exit right away.
-      Quickshell.execDetached(["bash", "-c",
-        "pkill -x hyprsunset; for i in $(seq 50); do pgrep -x hyprsunset >/dev/null || break; sleep 0.1; done; "
-        + "setsid uwsm-app -- hyprsunset >/dev/null 2>&1"])
-    }
-  }
-
-  // Leave hyprsunset alone while it restarts, so True Tone doesn't start a second one.
-  Timer {
-    id: sunsetRestarting
-    interval: 3000
+    onTriggered: scheduleFile.setText(Model.updateSchedule(scheduleFile.text(), root.schedule))
   }
 
   FileView {
@@ -433,6 +479,14 @@ Item {
     printErrors: false
     onFileChanged: reload()
     onLoaded: root.schedule = Model.parseSchedule(text())
+    onSaved: {
+      root.error = ""
+      root.launchSunset(true)
+    }
+    onSaveFailed: function(error) {
+      root.error = "Could not save the night light schedule"
+      reload()
+    }
   }
 
   // omarchy-shell studio-display <method> [args], e.g. for keybindings.
@@ -457,6 +511,12 @@ Item {
       root.setSchedule({ enabled: enabled === "true", start: start, end: end })
       return "ok"
     }
+  }
+
+  // Unloaded (plugin disabled, shell restart): hand the screen back.
+  Component.onDestruction: {
+    if (trueTone && !nightLight && nightState.ownTemp !== null)
+      Quickshell.execDetached(["hyprctl", "hyprsunset", "temperature", String(Model.NIGHT_OFF)])
   }
 
   FileView {

@@ -24,9 +24,10 @@ omarchy-shell studio-display setSchedule true 21:00 07:00
 
 - The sensor is the iio device `als` on the display's USB HID sensor hub (`/sys/bus/iio/devices/iio:device*`), read every 2 seconds. It reports milli-lux and kelvin.
 - Brightness steps up by at most 8% and down by at most 3% per reading, and ignores differences under 3%. Each step is one `asdcontrol` call.
-- Manual changes are detected from Omarchy's lock file (`$XDG_RUNTIME_DIR/omarchy-brightness-display.lock`), which `omarchy-brightness-display` opens for every change. The plugin calls the Apple script directly, so its own changes don't count.
+- Manual changes are detected from Omarchy's lock file (`$XDG_RUNTIME_DIR/omarchy-brightness-display.lock`), which `omarchy-brightness-display` opens for every change, on any screen. The plugin calls the Apple script directly, so its own changes don't count, and it only pauses when the Studio Display's brightness actually changed.
 - While True Tone is on, the plugin asks hyprsunset for its temperature and schedule every 2 seconds, to notice night light turning on or off. Omarchy's toggle command only turns night light on from exactly 6500 K; while True Tone holds another temperature it sets 6500 K instead, and the plugin turns that into night light (4000 K).
-- Turning True Tone off sets 6500 K, Omarchy's night light "off" temperature.
+- Turning True Tone off sets 6500 K, Omarchy's night light "off" temperature. So does unplugging the display or unloading the plugin, so other screens don't keep its tint.
+- When hyprsunset isn't running, the plugin starts it and then observes it before setting anything, so a scheduled night light that hyprsunset applies at start stays on. Schedule edits change only the two schedule profiles in `hyprsunset.conf`; other profiles, settings and comments stay. hyprsunset restarts once the file is saved.
 - Settings live inline on the bar entry in `~/.config/omarchy/shell.json`.
 
 ## Known limits
@@ -35,6 +36,7 @@ omarchy-shell studio-display setSchedule true 21:00 07:00
 - On a fresh start the plugin treats anything below 4800 K (warmer than True Tone ever goes) as night light. If hyprsunset kept running past a schedule's identity entry, it still reports the old night light temperature, so True Tone stays paused until night light is toggled or the next schedule entry.
 - Every brightness step runs `sudo asdcontrol` through Omarchy's passwordless rule, which writes a line to the auth log. That happens only while the brightness is moving, not while it is steady.
 - Omarchy's hot reload logs "reloading" but doesn't reliably apply changes to this plugin (service, widget or `Model.js`); after changing any of its files, restart the shell (`omarchy restart shell`).
+- A brightness key pressed during an automatic brightness step (one `asdcontrol` call, about 60 ms) can be undone by that step. Preventing it would mean holding Omarchy's brightness lock, which makes Omarchy drop the key press instead.
 - Enabling True Tone starts hyprsunset, which also applies the schedule in `~/.config/hypr/hyprsunset.conf` (by default: night light from 21:00 to 07:00).
 
 ## Tests

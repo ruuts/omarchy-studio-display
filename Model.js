@@ -147,27 +147,110 @@ function shiftTime(value, delta) {
   return formatTime((minutes === null ? 0 : minutes) + delta)
 }
 
-// Reads the schedule from hyprsunset.conf: the identity profile ends night light, the
-// warm profile starts it. A commented-out warm profile means the schedule is off.
+// The profile blocks in hyprsunset.conf, commented-out ones included, with
+// their line range and the settings this plugin cares about.
+function scheduleBlocks(lines) {
+  var blocks = []
+  for (var i = 0; i < lines.length; i++) {
+    var open = lines[i].match(/^\s*(#\s*)?profile\s*\{\s*$/)
+    if (!open) continue
+    var j = i + 1
+    while (j < lines.length && !/^\s*(#\s*)?\}\s*$/.test(lines[j])) j++
+    if (j >= lines.length) break
+    var body = lines.slice(i + 1, j).map(function(line) { return line.replace(/^\s*#\s?/, "") }).join("\n")
+    var time = body.match(/time\s*=\s*(\d{1,2}:\d{2})/)
+    var temp = body.match(/temperature\s*=\s*(\d+)/)
+    blocks.push({
+      start: i,
+      end: j,
+      commented: !!open[1],
+      time: time ? time[1] : null,
+      identity: /identity\s*=\s*true/.test(body),
+      temperature: temp ? Number(temp[1]) : null
+    })
+    i = j
+  }
+  return blocks
+}
+
+// The identity profile ends night light; the warm one starts it. A commented-out
+// warm profile means the schedule is off but keeps its time.
+function identityBlock(blocks) {
+  for (var i = 0; i < blocks.length; i++)
+    if (!blocks[i].commented && blocks[i].identity && blocks[i].time) return blocks[i]
+  return null
+}
+
+function warmBlock(blocks) {
+  var fallback = null
+  for (var i = 0; i < blocks.length; i++) {
+    var b = blocks[i]
+    if (b.identity || !b.time || b.temperature === null || b.temperature >= NIGHT_THRESHOLD) continue
+    if (!b.commented) return b
+    if (!fallback) fallback = b
+  }
+  return fallback
+}
+
 function parseSchedule(text) {
   var schedule = { enabled: false, start: "21:00", end: "07:00", temperature: NIGHT_ON }
-  var blocks = String(text || "").match(/^[ \t]*#?[ \t]*profile[ \t]*\{[^}]*\}/gm) || []
-  for (var i = 0; i < blocks.length; i++) {
-    var commented = /^[ \t]*#/.test(blocks[i])
-    var body = blocks[i].replace(/^[ \t]*#[ \t]?/gm, "")
-    var time = body.match(/time\s*=\s*(\d{1,2}:\d{2})/)
-    var identity = /identity\s*=\s*true/.test(body)
-    var temp = body.match(/temperature\s*=\s*(\d+)/)
-    if (!time) continue
-    if (identity && !commented) {
-      schedule.end = formatTime(parseTime(time[1]))
-    } else if (temp && Number(temp[1]) < NIGHT_THRESHOLD) {
-      schedule.start = formatTime(parseTime(time[1]))
-      schedule.temperature = Number(temp[1])
-      schedule.enabled = !commented
-    }
+  var blocks = scheduleBlocks(String(text || "").split("\n"))
+  var identity = identityBlock(blocks)
+  if (identity) schedule.end = formatTime(parseTime(identity.time))
+  var warm = warmBlock(blocks)
+  if (warm) {
+    schedule.start = formatTime(parseTime(warm.time))
+    schedule.temperature = warm.temperature
+    schedule.enabled = !warm.commented
   }
   return schedule
+}
+
+// Changes only the two profiles the schedule consists of (their times, and
+// whether the warm one is commented out); everything else in the file stays.
+function updateSchedule(text, schedule) {
+  var source = String(text || "")
+  if (source.trim() === "") return scheduleConf(schedule)
+  var lines = source.split("\n")
+  var blocks = scheduleBlocks(lines)
+  var identity = identityBlock(blocks)
+  var warm = warmBlock(blocks)
+
+  function setTime(block, value) {
+    for (var k = block.start + 1; k < block.end; k++) {
+      if (/time\s*=\s*\d{1,2}:\d{2}/.test(lines[k])) {
+        lines[k] = lines[k].replace(/(time\s*=\s*)\d{1,2}:\d{2}/, "$1" + value)
+        return
+      }
+    }
+  }
+
+  function setCommented(block, commented) {
+    for (var k = block.start; k <= block.end; k++) {
+      if (commented && !/^\s*#/.test(lines[k])) lines[k] = "# " + lines[k]
+      else if (!commented) lines[k] = lines[k].replace(/^(\s*)#\s?/, "$1")
+    }
+  }
+
+  if (identity) setTime(identity, schedule.end)
+  if (warm) {
+    setTime(warm, schedule.start)
+    setCommented(warm, !schedule.enabled)
+  }
+
+  var appended = []
+  if (!identity) appended.push("profile {", "    time = " + schedule.end, "    identity = true", "}")
+  if (!warm) {
+    var block = ["profile {", "    time = " + schedule.start, "    temperature = " + schedule.temperature, "}"]
+    if (!schedule.enabled) block = block.map(function(line) { return "# " + line })
+    if (appended.length) appended.push("")
+    appended = appended.concat(block)
+  }
+  if (appended.length) {
+    while (lines.length && lines[lines.length - 1] === "") lines.pop()
+    lines = lines.concat([""], appended, [""])
+  }
+  return lines.join("\n")
 }
 
 function scheduleConf(schedule) {
@@ -207,6 +290,7 @@ if (typeof module !== "undefined") {
     parseProfile: parseProfile,
     shiftTime: shiftTime,
     parseSchedule: parseSchedule,
+    updateSchedule: updateSchedule,
     scheduleConf: scheduleConf
   }
 }

@@ -176,6 +176,16 @@ Column {
     }
   }
 
+  Text {
+    visible: text !== ""
+    width: parent.width
+    text: root.service?.error || ""
+    color: Commons.Color.urgent
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+    wrapMode: Text.WordWrap
+  }
+
   // The three toggles: a round button (square on a square theme), name, state.
   Row {
     width: parent.width

@@ -107,6 +107,38 @@ assert.deepEqual(M.parseSchedule(M.scheduleConf(later)), later)
 const off = { ...later, enabled: false }
 assert.deepEqual(M.parseSchedule(M.scheduleConf(off)), off)
 assert.match(M.scheduleConf(off), /^# profile \{$/m)
+// Editing keeps everything that isn't the schedule: comments, settings, other profiles.
+const custom = `# My hyprsunset setup
+max-gamma = 150
+
+profile {
+    time = 07:00
+    identity = true
+}
+
+profile {
+    time = 21:00
+    temperature = 4000
+    gamma = 0.8
+}
+
+profile {
+    time = 12:00
+    gamma = 1.1
+}
+`
+const moved = M.updateSchedule(custom, { enabled: true, start: "22:30", end: "06:30", temperature: 4000 })
+assert.equal(moved, custom.replace("time = 07:00", "time = 06:30").replace("time = 21:00", "time = 22:30"))
+const switchedOff = M.updateSchedule(moved, { enabled: false, start: "22:30", end: "06:30", temperature: 4000 })
+assert.deepEqual(M.parseSchedule(switchedOff), { enabled: false, start: "22:30", end: "06:30", temperature: 4000 })
+assert.match(switchedOff, /^# profile \{\n#     time = 22:30\n#     temperature = 4000\n#     gamma = 0.8\n# \}$/m)
+assert.match(switchedOff, /^profile \{\n    time = 12:00\n    gamma = 1.1\n\}$/m, "other profiles stay active")
+assert.equal(M.updateSchedule(switchedOff, { enabled: true, start: "22:30", end: "06:30", temperature: 4000 }), moved)
+// A file without a schedule gets the missing profiles appended.
+const bare = "max-gamma = 150\n"
+assert.deepEqual(M.parseSchedule(M.updateSchedule(bare, later)), later)
+assert.match(M.updateSchedule(bare, later), /^max-gamma = 150\n/)
+assert.equal(M.updateSchedule("", later), M.scheduleConf(later))
 assert.equal(M.shiftTime("23:30", 30), "00:00")
 assert.equal(M.shiftTime("00:00", -30), "23:30")
 assert.equal(M.shiftTime("7:00", 30), "07:30")
